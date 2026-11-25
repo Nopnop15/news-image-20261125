@@ -167,7 +167,7 @@ def main():
     panel_text(d, x, row1_y, pw, row1_h, 96, "EUROPE  •  RUSSIA",
                "EU SANCTIONS RUSSIA",
                "Brussels proposes a broad package on banks, "
-               "crypto and sport.",
+               "crypto and sport, plus a visa ban.",
                BLUE, head_size=23)
 
     # CIA / ODNI hacked: dark screen, warning triangle, binary rain.
@@ -184,7 +184,7 @@ def main():
     panel_text(d, x, row1_y, pw, row1_h, 96, "UNITED STATES  •  CYBER",
                "CIA AND ODNI HACKED",
                "A cyberattack hits unclassified systems at the "
-               "CIA and ODNI.",
+               "CIA and ODNI; classified networks hold.",
                (20, 24, 40), head_size=23)
 
     # Australia–Solomons pact: teal sea, two landmasses, dashed link.
