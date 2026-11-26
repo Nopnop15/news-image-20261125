@@ -1,260 +1,357 @@
 #!/usr/bin/env python3
-"""Draw the 25 November 2026 front page: a masthead, a hero rocket story,
-and five more news panels, all rendered with Pillow from scratch."""
+"""Draw the full-day front page for Wednesday 25 November 2026.
+
+A masthead, one wide hero story and five more panels, all drawn with
+Pillow. The finished page is written to entry.png next to this file:
+
+    python3 generate_image.py
+"""
+
+import math
 
 from PIL import Image, ImageDraw, ImageFont
 
-W, H = 1024, 1024
-PAPER = (246, 241, 229)
-INK = (26, 26, 30)
-NAVY = (22, 38, 74)
-GOLD = (232, 193, 90)
-RED = (178, 34, 34)
-TEAL = (38, 110, 104)
-BLUE = (31, 58, 147)
+PAGE = 1024
+PAPER = (247, 242, 230)
+INK = (24, 24, 28)
+MUTED = (74, 74, 80)
+NAVY = (20, 36, 72)
+GOLD = (233, 194, 92)
+RED = (176, 32, 32)
+TEAL = (36, 108, 102)
+DARK = (18, 22, 38)
+CARD_LINE = (182, 174, 152)
+WHITE = (255, 255, 255)
 
-SERIF = "/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf"
-SERIF_REG = "/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf"
-SANS = "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"
+SERIF_B = "/usr/share/fonts/truetype/liberation/LiberationSerif-Bold.ttf"
+SERIF_R = "/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf"
+SANS_R = "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf"
 SANS_B = "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"
 
 
-def font(path, size):
+def load(path, size):
     return ImageFont.truetype(path, size)
 
 
-def wrap(d, text, f, max_w):
-    """Greedy word wrap returning a list of lines that fit max_w."""
-    lines, cur = [], ""
-    for word in text.split(" "):
-        trial = (cur + " " + word).strip()
-        if d.textlength(trial, font=f) <= max_w:
-            cur = trial
+def split_lines(draw, text, face, limit):
+    """Greedy wrap: pack words into lines no wider than limit pixels."""
+    out = []
+    current = ""
+    for word in text.split():
+        candidate = word if not current else current + " " + word
+        if draw.textlength(candidate, font=face) <= limit:
+            current = candidate
         else:
-            if cur:
-                lines.append(cur)
-            cur = word
-    if cur:
-        lines.append(cur)
-    return lines
+            if current:
+                out.append(current)
+            current = word
+    if current:
+        out.append(current)
+    return out
 
 
-def text_block(d, x, y, lines, f, fill, leading):
+def put_lines(draw, x, y, lines, face, fill, step):
     for line in lines:
-        d.text((x, y), line, font=f, fill=fill)
-        y += leading
+        draw.text((x, y), line, font=face, fill=fill)
+        y += step
     return y
 
 
-def star(d, cx, cy, r, fill):
-    import math
-    pts = []
-    for i in range(10):
-        ang = -math.pi / 2 + i * math.pi / 5
-        rr = r if i % 2 == 0 else r * 0.42
-        pts.append((cx + rr * math.cos(ang), cy + rr * math.sin(ang)))
-    d.polygon(pts, fill=fill)
+def vgrad(draw, box, top, bottom):
+    """Vertical gradient fill inside box (x0, y0, x1, y1)."""
+    x0, y0, x1, y1 = box
+    span = max(1, y1 - y0)
+    for row in range(y0, y1):
+        t = (row - y0) / span
+        mix = tuple(int(top[i] + (bottom[i] - top[i]) * t) for i in range(3))
+        draw.line([(x0, row), (x1, row)], fill=mix)
 
 
-def star_circle(d, cx, cy, r, n, sr, fill):
-    import math
-    for i in range(n):
-        ang = -math.pi / 2 + i * 2 * math.pi / n
-        star(d, cx + r * math.cos(ang), cy + r * math.sin(ang), sr, fill)
+def flame(draw, x, y, w, h, inner=(255, 214, 90), outer=(255, 122, 0)):
+    """A flame tongue rising from (x, y) with width w and height h."""
+    draw.polygon(
+        [(x, y), (x + w, y), (x + w * 0.72, y - h * 0.62),
+         (x + w * 0.5, y - h), (x + w * 0.28, y - h * 0.62)],
+        fill=outer,
+    )
+    draw.polygon(
+        [(x + w * 0.22, y), (x + w * 0.78, y), (x + w * 0.62, y - h * 0.45),
+         (x + w * 0.5, y - h * 0.72), (x + w * 0.38, y - h * 0.45)],
+        fill=inner,
+    )
 
 
-def panel(d, x, y, w, h, kicker, headline, subline, accent, head_size=25):
-    """A white card: drawn scene on top, kicker + headline + subline below."""
-    d.rectangle([x, y, x + w, y + h], fill=(255, 255, 255),
-                outline=(180, 172, 150), width=2)
-    scene_h = 108
-    return x, y, w, h, scene_h, kicker, headline, subline, accent, head_size
+def smoke(draw, puffs, fill=(60, 60, 66)):
+    for cx, cy, rx, ry in puffs:
+        draw.ellipse([cx - rx, cy - ry, cx + rx, cy + ry], fill=fill)
 
 
-def panel_text(d, x, y, w, h, scene_h, kicker, headline, subline, accent,
-               head_size=25):
+def tanker(draw, x, y, w, h, hull=(38, 38, 44), deck=(210, 205, 195)):
+    """Side view of an oil tanker: hull, deck line, bridge tower, funnel."""
+    draw.rectangle([x, y + h * 0.55, x + w, y + h], fill=hull)
+    draw.rectangle([x, y + h * 0.55, x + w, y + h * 0.62], fill=deck)
+    draw.rectangle([x + w * 0.72, y, x + w * 0.88, y + h * 0.55], fill=(240, 238, 232))
+    draw.rectangle([x + w * 0.72, y + h * 0.14, x + w * 0.88, y + h * 0.2],
+                   fill=(70, 70, 78))
+    draw.rectangle([x + w * 0.1, y + h * 0.3, x + w * 0.2, y + h * 0.55],
+                   fill=(200, 52, 52))
+
+
+def mine(draw, cx, cy, r):
+    draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=(30, 30, 34))
+    for k in range(8):
+        ang = k * math.pi / 4
+        x1 = cx + r * 0.9 * math.cos(ang)
+        y1 = cy + r * 0.9 * math.sin(ang)
+        x2 = cx + r * 1.5 * math.cos(ang)
+        y2 = cy + r * 1.5 * math.sin(ang)
+        draw.line([(x1, y1), (x2, y2)], fill=(30, 30, 34), width=3)
+
+
+def card(draw, x, y, w, h):
+    draw.rectangle([x, y, x + w, y + h], fill=WHITE,
+                   outline=CARD_LINE, width=2)
+
+
+def card_text(draw, x, y, w, h, scene_h, kicker, headline, subline,
+              accent, head_size=23):
     tx = x + 14
     tw = w - 28
     ty = y + scene_h + 10
-    d.text((tx, ty), kicker, font=font(SANS_B, 15), fill=accent)
+    draw.text((tx, ty), kicker, font=load(SANS_B, 15), fill=accent)
     ty += 24
-    hl = wrap(d, headline, font(SERIF, head_size), tw)
-    ty = text_block(d, tx, ty, hl, font(SERIF, head_size), INK, head_size + 4)
+    face = load(SERIF_B, head_size)
+    lines = split_lines(draw, headline, face, tw)
+    ty = put_lines(draw, tx, ty, lines, face, INK, head_size + 4)
     ty += 4
-    sl = wrap(d, subline, font(SANS, 16), tw)
-    text_block(d, tx, ty, sl, font(SANS, 16), (70, 70, 76), 21)
+    sface = load(SANS_R, 16)
+    slines = split_lines(draw, subline, sface, tw)
+    put_lines(draw, tx, ty, slines, sface, MUTED, 21)
 
 
-def main():
-    img = Image.new("RGB", (W, H), PAPER)
+def hero_hormuz(draw, x, y, w, h):
+    """Night sea in the Strait: two tankers burning, a mine in front."""
+    vgrad(draw, (x, y, x + w, y + h), (14, 26, 58), (52, 74, 96))
+    for px, py in [(30, 26), (120, 60), (210, 20), (330, 52), (430, 30),
+                   (80, 100), (280, 92), (470, 96), (180, 130), (380, 128)]:
+        draw.ellipse([x + px - 2, y + py - 2, x + px + 2, y + py + 2],
+                     fill=(220, 224, 235))
+    # Moon.
+    draw.ellipse([x + w - 72, y + 18, x + w - 28, y + 62], fill=(238, 234, 214))
+    # Sea.
+    draw.rectangle([x, y + h - 58, x + w, y + h], fill=(16, 42, 66))
+    for wx in range(0, w, 46):
+        draw.line([(x + wx, y + h - 34), (x + wx + 24, y + h - 34)],
+                  fill=(90, 120, 150), width=2)
+    # Two tankers, the nearer one on fire.
+    tanker(draw, x + 30, y + h - 118, 200, 62)
+    flame(draw, x + 96, y + h - 116, 52, 66)
+    flame(draw, x + 150, y + h - 116, 36, 46)
+    smoke(draw, [(x + 120, y + 22, 34, 16), (x + 168, y + 8, 26, 12),
+                 (x + 90, y + 40, 24, 11)])
+    tanker(draw, x + 290, y + h - 104, 170, 50)
+    flame(draw, x + 330, y + h - 102, 40, 48)
+    smoke(draw, [(x + 350, y + 30, 28, 13), (x + 392, y + 16, 20, 10)])
+    # A naval mine drifting in the foreground.
+    mine(draw, x + 470, y + h - 22, 13)
+
+
+def scene_ras_tanura(draw, x, y, w, h):
+    """Dusk over a refinery: towers, flare stack, black smoke."""
+    vgrad(draw, (x, y, x + w, y + h), (214, 138, 74), (96, 66, 66))
+    draw.ellipse([x + w - 52, y + 10, x + w - 12, y + 50], fill=(250, 222, 160))
+    # Distillation towers.
+    for tx, th in [(26, 62), (66, 78), (112, 56)]:
+        draw.rectangle([x + tx, y + h - th, x + tx + 22, y + h],
+                       fill=(64, 58, 56))
+        draw.rectangle([x + tx - 4, y + h - th - 8, x + tx + 26, y + h - th],
+                       fill=(88, 80, 76))
+    # Flare stack with flame.
+    draw.rectangle([x + w - 66, y + 14, x + w - 56, y + h], fill=(52, 48, 46))
+    flame(draw, x + w - 70, y + 16, 18, 22)
+    # Storage tanks.
+    for tx in (168, 216):
+        draw.ellipse([x + tx, y + h - 44, x + tx + 44, y + h - 26],
+                     fill=(150, 142, 130))
+        draw.rectangle([x + tx, y + h - 30, x + tx + 44, y + h],
+                       fill=(176, 168, 154))
+    # Thick black smoke.
+    smoke(draw, [(x + 60, y + 12, 30, 12), (x + 110, y + 4, 24, 10),
+                 (x + 160, y + 14, 26, 11)], fill=(36, 34, 34))
+
+
+def scene_ukraine(draw, x, y, w, h):
+    """Night strike on a refinery: burning towers under a dark sky."""
+    vgrad(draw, (x, y, x + w, y + h), (22, 24, 44), (74, 52, 52))
+    for px, py in [(24, 14), (90, 30), (180, 12), (250, 28), (140, 44)]:
+        draw.ellipse([x + px - 2, y + py - 2, x + px + 2, y + py + 2],
+                     fill=(200, 204, 220))
+    # Plant silhouettes.
+    for tx, th in [(20, 52), (58, 68), (104, 48), (150, 60), (196, 44)]:
+        draw.rectangle([x + tx, y + h - th, x + tx + 20, y + h],
+                       fill=(24, 22, 30))
+    draw.ellipse([x + 232, y + h - 40, x + 276, y + h - 22], fill=(24, 22, 30))
+    draw.rectangle([x + 232, y + h - 28, x + 276, y + h], fill=(24, 22, 30))
+    # Two big fires.
+    flame(draw, x + 62, y + h - 66, 44, 58)
+    flame(draw, x + 150, y + h - 58, 38, 48)
+    smoke(draw, [(x + 84, y + 6, 26, 11), (x + 170, y + 12, 24, 10)],
+          fill=(44, 40, 44))
+
+
+def scene_huawei(draw, x, y, w, h):
+    """A courthouse front: columns, pediment and the scales of justice."""
+    draw.rectangle([x, y, x + w, y + h], fill=(28, 44, 84))
+    # Pediment and columns.
+    draw.polygon([(x + 36, y + 12), (x + w - 36, y + 12), (x + w // 2, y + 38)],
+                 fill=(232, 226, 210))
+    for cx in (66, 118, 170, 222):
+        draw.rectangle([x + cx, y + 40, x + cx + 14, y + h - 12],
+                       fill=(232, 226, 210))
+    draw.rectangle([x + 48, y + h - 14, x + w - 48, y + h - 6],
+                   fill=(232, 226, 210))
+    # Scales: pillar, beam, two pans.
+    cx = x + w // 2
+    draw.rectangle([cx - 3, y + 46, cx + 3, y + h - 20], fill=GOLD)
+    draw.line([(cx - 42, y + 52), (cx + 42, y + 52)], fill=GOLD, width=4)
+    for sx in (cx - 42, cx + 42):
+        draw.line([(sx, y + 52), (sx, y + 70)], fill=GOLD, width=2)
+        draw.pieslice([sx - 16, y + 62, sx + 16, y + 78], 0, 180, fill=GOLD)
+    draw.ellipse([cx - 5, y + 42, cx + 5, y + 52], fill=GOLD)
+
+
+def scene_markets(draw, x, y, w, h):
+    """A market chart: red plunge, then a green leg up."""
+    draw.rectangle([x, y, x + w, y + h], fill=(250, 246, 238))
+    for gy in range(y + 18, y + h - 8, 18):
+        draw.line([(x + 8, gy), (x + w - 8, gy)], fill=(226, 220, 206))
+    # Red falling leg.
+    red_pts = [(x + 16, y + 16), (x + 78, y + 30), (x + 140, y + 26),
+               (x + 202, y + 52), (x + 250, y + 74)]
+    draw.line(red_pts, fill=RED, width=5)
+    draw.polygon([(x + 250, y + 74), (x + 232, y + 68), (x + 246, y + 56)],
+                 fill=RED)
+    # Green rising leg.
+    green_pts = [(x + 250, y + 74), (x + 268, y + 58), (x + 288, y + 44)]
+    draw.line(green_pts, fill=(30, 130, 60), width=5)
+    draw.polygon([(x + 288, y + 44), (x + 272, y + 40), (x + 282, y + 28)],
+                 fill=(30, 130, 60))
+    draw.text((x + 16, y + 78), "-6.16%", font=load(SANS_B, 17), fill=RED)
+
+
+def scene_rocket(draw, x, y, w, h):
+    """Compact launch: starry sky, a small rocket lifting off."""
+    vgrad(draw, (x, y, x + w, y + h), (16, 28, 66), (64, 88, 132))
+    for px, py in [(24, 12), (90, 30), (170, 10), (260, 26), (350, 14),
+                   (420, 30), (60, 52), (310, 48)]:
+        draw.ellipse([x + px - 2, y + py - 2, x + px + 2, y + py + 2],
+                     fill=WHITE)
+    # Ground.
+    draw.rectangle([x, y + h - 16, x + w, y + h], fill=(52, 48, 44))
+    # Rocket.
+    rx = x + 40
+    draw.polygon([(rx, y + 18), (rx + 26, y + 18), (rx + 26, y + 62),
+                  (rx, y + 62)], fill=(240, 240, 235))
+    draw.pieslice([rx, y + 4, rx + 26, y + 30], 180, 360, fill=(200, 40, 40))
+    draw.rectangle([rx, y + 40, rx + 26, y + 50], fill=(200, 40, 40))
+    draw.polygon([(rx - 10, y + 62), (rx, y + 42), (rx, y + 62)],
+                 fill=(200, 40, 40))
+    draw.polygon([(rx + 26, y + 62), (rx + 26, y + 42), (rx + 36, y + 62)],
+                 fill=(200, 40, 40))
+    flame(draw, rx + 6, y + 62, 14, 20)
+    smoke(draw, [(x + 130, y + h - 14, 26, 9), (x + 180, y + h - 10, 20, 8)])
+    draw.text((x + 120, y + 22), "SHENZHOU-24", font=load(SANS_B, 20),
+              fill=GOLD)
+
+
+def build():
+    img = Image.new("RGB", (PAGE, PAGE), PAPER)
     d = ImageDraw.Draw(img)
 
     # ---- Masthead ----
-    d.rectangle([0, 0, W, 118], fill=NAVY)
-    d.rectangle([0, 118, W, 122], fill=GOLD)
+    d.rectangle([0, 0, PAGE, 118], fill=NAVY)
+    d.rectangle([0, 118, PAGE, 122], fill=GOLD)
     title = "THE WORLD IN ONE PAGE"
-    tw = d.textlength(title, font=font(SERIF, 46))
-    d.text(((W - tw) / 2, 14), title, font=font(SERIF, 46), fill=(255, 255, 255))
+    tw = d.textlength(title, font=load(SERIF_B, 46))
+    d.text(((PAGE - tw) / 2, 14), title, font=load(SERIF_B, 46), fill=WHITE)
     date = "WEDNESDAY 25 NOVEMBER 2026"
-    dw = d.textlength(date, font=font(SANS_B, 27))
-    d.text(((W - dw) / 2, 72), date, font=font(SANS_B, 27), fill=GOLD)
+    dw = d.textlength(date, font=load(SANS_B, 27))
+    d.text(((PAGE - dw) / 2, 72), date, font=load(SANS_B, 27), fill=GOLD)
 
-    # ---- Hero: Shenzhou-24 launch ----
+    # ---- Hero: tankers hit mines in Hormuz ----
     hx, hy, hw, hh = 24, 134, 976, 276
-    d.rectangle([hx, hy, hx + hw, hy + hh], fill=(255, 255, 255),
-                outline=(180, 172, 150), width=2)
-    # Sky scene on the left half.
-    sx, sy, sw, sh = hx + 2, hy + 2, 520, hh - 4
-    for i in range(sh):
-        t = i / sh
-        d.line([(sx, sy + i), (sx + sw, sy + i)],
-               fill=(int(16 + 30 * t), int(28 + 46 * t), int(66 + 74 * t)))
-    for (px, py, r) in [(40, 30, 2), (120, 70, 2), (200, 25, 3), (300, 60, 2),
-                        (420, 35, 2), (500, 80, 3), (80, 120, 2), (260, 110, 2),
-                        (470, 130, 2), (160, 150, 2), (350, 150, 2)]:
-        d.ellipse([sx + px - r, sy + py - r, sx + px + r, sy + py + r],
-                  fill=(255, 255, 255))
-    # Ground and launch pad.
-    d.rectangle([sx, sy + sh - 34, sx + sw, sy + sh], fill=(52, 48, 44))
-    d.rectangle([sx + 210, sy + sh - 52, sx + 350, sy + sh - 34], fill=(120, 116, 110))
-    # Rocket body.
-    rx, ry = sx + 250, sy + 42
-    d.polygon([(rx, ry), (rx + 60, ry), (rx + 60, ry + 150), (rx, ry + 150)],
-              fill=(240, 240, 235))
-    d.pieslice([rx, ry - 34, rx + 60, ry + 34], 180, 360, fill=(200, 40, 40))
-    d.rectangle([rx, ry + 60, rx + 60, ry + 82], fill=(200, 40, 40))
-    d.text((rx + 22, ry + 95), "24", font=font(SANS_B, 26), fill=NAVY)
-    d.polygon([(rx - 26, ry + 150), (rx, ry + 96), (rx, ry + 150)], fill=(200, 40, 40))
-    d.polygon([(rx + 60, ry + 150), (rx + 60, ry + 96), (rx + 86, ry + 150)],
-              fill=(200, 40, 40))
-    # Flame and smoke.
-    d.polygon([(rx + 12, ry + 150), (rx + 48, ry + 150), (rx + 30, ry + 208)],
-              fill=(255, 140, 0))
-    d.polygon([(rx + 20, ry + 150), (rx + 40, ry + 150), (rx + 30, ry + 186)],
-              fill=(255, 220, 80))
-    for (cx, cy, cr) in [(150, 235, 26), (200, 246, 32), (420, 238, 26),
-                         (470, 248, 30), (120, 252, 20), (500, 252, 20)]:
-        d.ellipse([sx + cx - cr, sy + cy - cr // 2, sx + cx + cr,
-                   sy + cy + cr // 2], fill=(210, 205, 195))
-    # Hero text on the right.
-    tx, tw = hx + 544, hw - 568
-    d.text((tx, hy + 22), "SPACE  •  CHINA", font=font(SANS_B, 18), fill=RED)
-    hl = wrap(d, "SHENZHOU-24 LAUNCHES", font(SERIF, 40), tw)
-    ty = text_block(d, tx, hy + 52, hl, font(SERIF, 40), INK, 46)
-    sub = ("Tang Hongbo, Wu Yi and Muhammad Zeeshan Ali — the first "
-           "Pakistani in orbit — head to Tiangong.")
-    sl = wrap(d, sub, font(SANS, 20), tw)
-    ty = text_block(d, tx, ty + 10, sl, font(SANS, 20), (70, 70, 76), 26)
-    d.text((tx, ty + 12), "Lift-off 08:18 Beijing time, Jiuquan.",
-           font=font(SERIF_REG, 18), fill=(90, 90, 96))
+    card(d, hx, hy, hw, hh)
+    hero_hormuz(d, hx + 2, hy + 2, 520, hh - 4)
+    tx = hx + 544
+    tw2 = hw - 568
+    d.text((tx, hy + 22), "STRAIT OF HORMUZ  •  ENERGY",
+           font=load(SANS_B, 18), fill=RED)
+    face = load(SERIF_B, 40)
+    ty = put_lines(d, tx, hy + 52,
+                   split_lines(d, "TANKERS HIT MINES, BURN", face, tw2),
+                   face, INK, 46)
+    sub = ("Iran says two tankers struck naval mines and caught fire on "
+           "an unauthorised route through the strait.")
+    ty = put_lines(d, tx, ty + 10,
+                   split_lines(d, sub, load(SANS_R, 20), tw2),
+                   load(SANS_R, 20), MUTED, 26)
+    d.text((tx, ty + 12), "Brent crude jumps above $91 a barrel.",
+           font=load(SERIF_R, 18), fill=(90, 90, 96))
 
     # ---- Row 1: three panels ----
     row1_y, row1_h, pw = 424, 262, 312
-    xs = [24, 356, 688]
-
-    # EU sanctions: blue field, circle of gold stars, bank building, red slash.
-    x = xs[0]
-    panel(d, x, row1_y, pw, row1_h, "", "", "", BLUE)
-    d.rectangle([x + 2, row1_y + 2, x + pw - 2, row1_y + 98], fill=BLUE)
-    star_circle(d, x + 156, row1_y + 50, 40, 12, 7, GOLD)
-    d.rectangle([x + 128, row1_y + 42, x + 184, row1_y + 48], fill=(255, 255, 255))
-    d.polygon([(x + 122, row1_y + 44), (x + 156, row1_y + 26),
-               (x + 190, row1_y + 44)], fill=(255, 255, 255))
-    for cx in (136, 149, 162, 175):
-        d.rectangle([cx, row1_y + 50, cx + 6, row1_y + 72], fill=(255, 255, 255))
-    d.rectangle([x + 124, row1_y + 72, x + 188, row1_y + 78], fill=(255, 255, 255))
-    d.line([(x + 128, row1_y + 84), (x + 184, row1_y + 28)], fill=RED, width=7)
-    panel_text(d, x, row1_y, pw, row1_h, 96, "EUROPE  •  RUSSIA",
-               "EU SANCTIONS RUSSIA",
-               "Brussels proposes a broad package on banks, "
-               "crypto and sport, plus a visa ban.",
-               BLUE, head_size=23)
-
-    # CIA / ODNI hacked: dark screen, warning triangle, binary rain.
-    x = xs[1]
-    panel(d, x, row1_y, pw, row1_h, "", "", "", (20, 24, 40))
-    d.rectangle([x + 2, row1_y + 2, x + pw - 2, row1_y + 98], fill=(20, 24, 40))
-    for (bx, by) in [(20, 16), (60, 44), (250, 20), (280, 60), (30, 80), (270, 88)]:
-        d.text((x + bx, row1_y + by), "01", font=font(SANS_B, 13), fill=(70, 90, 120))
-    d.rectangle([x + 96, row1_y + 18, x + 216, row1_y + 92], outline=(120, 130, 150),
-                width=3)
-    d.polygon([(x + 156, row1_y + 30), (x + 196, row1_y + 80), (x + 116, row1_y + 80)],
-              fill=(255, 200, 40))
-    d.text((x + 150, row1_y + 50), "!", font=font(SANS_B, 30), fill=(20, 24, 40))
-    panel_text(d, x, row1_y, pw, row1_h, 96, "UNITED STATES  •  CYBER",
-               "CIA AND ODNI HACKED",
-               "A cyberattack hits unclassified systems at the "
-               "CIA and ODNI; classified networks hold.",
-               (20, 24, 40), head_size=23)
-
-    # Australia–Solomons pact: teal sea, two landmasses, dashed link.
-    x = xs[2]
-    panel(d, x, row1_y, pw, row1_h, "", "", "", TEAL)
-    d.rectangle([x + 2, row1_y + 2, x + pw - 2, row1_y + 98], fill=(46, 126, 120))
-    d.ellipse([x + 28, row1_y + 58, x + 118, row1_y + 94], fill=(214, 164, 90))
-    d.ellipse([x + 210, row1_y + 22, x + 268, row1_y + 54], fill=(120, 190, 110))
-    for i in range(7):
-        t = i / 6
-        px = x + 120 + t * 92
-        py = row1_y + 66 - 26 * (1 - (2 * t - 1) ** 2)
-        if i % 2 == 0:
-            d.ellipse([px - 3, py - 3, px + 3, py + 3], fill=(255, 255, 255))
-    d.polygon([(x + 156, row1_y + 30), (x + 166, row1_y + 20), (x + 176, row1_y + 30),
-               (x + 176, row1_y + 48), (x + 166, row1_y + 58), (x + 156, row1_y + 48)],
-              fill=GOLD)
-    panel_text(d, x, row1_y, pw, row1_h, 96, "PACIFIC  •  SECURITY",
-               "AUSTRALIA–SOLOMONS PACT",
-               "Canberra becomes the Solomons' primary security "
-               "partner.",
-               TEAL, head_size=23)
+    for x, scene, kicker, headline, subline, accent in [
+        (24, scene_ras_tanura, "SAUDI ARABIA  •  OIL",
+         "HOUTHIS HIT RAS TANURA",
+         "Houthis claim a strike on the kingdom's biggest refinery; "
+         "a Riyadh tower is hit again, 11 hurt.",
+         (150, 60, 20)),
+        (356, scene_ukraine, "UKRAINE  •  RUSSIA",
+         "DRONES TORCH TWO REFINERIES",
+         "Kyiv says its drones set Rosneft's Syzran and Kuibyshev "
+         "plants ablaze; one killed in Samara.",
+         (20, 24, 40)),
+        (688, scene_huawei, "UNITED STATES  •  TECH",
+         "HUAWEI GUILTY ON 10 COUNTS",
+         "A Brooklyn jury convicts Huawei of bank fraud, sanctions "
+         "breaches and trade-secret theft.",
+         NAVY),
+    ]:
+        card(d, x, row1_y, pw, row1_h)
+        scene(d, x + 2, row1_y + 2, pw - 4, 96)
+        card_text(d, x, row1_y, pw, row1_h, 96, kicker, headline, subline,
+                  accent, head_size=23)
 
     # ---- Row 2: two wide panels ----
-    row2_y, row2_h = 700, 244
-    # Sanofi buys Insmed: capsule pill and $41bn.
-    x, w2 = 24, 478
-    panel(d, x, row2_y, w2, row2_h, "", "", "", (150, 30, 90))
-    d.rectangle([x + 2, row2_y + 2, x + w2 - 2, row2_y + 100], fill=(238, 232, 222))
-    d.rounded_rectangle([x + 40, row2_y + 30, x + 210, row2_y + 72], radius=21,
-                        fill=(200, 40, 60))
-    d.rounded_rectangle([x + 40, row2_y + 30, x + 125, row2_y + 72], radius=21,
-                        fill=(255, 255, 255))
-    d.ellipse([x + 150, row2_y + 42, x + 158, row2_y + 60], fill=(200, 40, 60))
-    d.text((x + 250, row2_y + 26), "$41bn", font=font(SERIF, 46), fill=(150, 30, 90))
-    panel_text(d, x, row2_y, w2, row2_h, 98, "BUSINESS  •  PHARMA",
-               "SANOFI BUYS INSMED",
-               "French drugmaker Sanofi agrees a $41 billion takeover "
-               "of US biotech Insmed.",
-               (150, 30, 90), head_size=27)
-
-    # Rial at record low: falling chart and banknote.
-    x = 522
-    panel(d, x, row2_y, w2, row2_h, "", "", "", RED)
-    d.rectangle([x + 2, row2_y + 2, x + w2 - 2, row2_y + 100], fill=(250, 244, 230))
-    d.rectangle([x + 30, row2_y + 22, x + 130, row2_y + 78], fill=(140, 190, 120),
-                outline=(90, 130, 80), width=2)
-    d.ellipse([x + 66, row2_y + 38, x + 94, row2_y + 62], outline=(255, 255, 255),
-              width=3)
-    pts = [(150, 30), (210, 42), (270, 38), (330, 58), (390, 74), (440, 88)]
-    pts = [(x + px, row2_y + py) for (px, py) in pts]
-    d.line(pts, fill=RED, width=5)
-    d.polygon([(x + 440, row2_y + 88), (x + 424, row2_y + 82),
-               (x + 440, row2_y + 70)], fill=RED)
-    panel_text(d, x, row2_y, w2, row2_h, 98, "IRAN  •  ECONOMY",
-               "RIAL AT RECORD LOW",
-               "Iran's currency sinks to 2.856 million per dollar "
-               "after fresh US sanctions hit its banks.",
-               RED, head_size=27)
+    row2_y, row2_h, w2 = 700, 244, 478
+    for x, scene, kicker, headline, subline, accent in [
+        (24, scene_markets, "MARKETS  •  STOCKS",
+         "KOSPI -6.2%, DOW TOPS 50,000",
+         "Asia's tech rout sinks Seoul 6.16% as the Dow closes above "
+         "50,000 for the first time.",
+         RED),
+        (522, scene_rocket, "SPACE  •  CHINA",
+         "SHENZHOU-24 LAUNCHES",
+         "Tang Hongbo, Wu Yi and Muhammad Zeeshan Ali — the first "
+         "Pakistani in orbit — head to Tiangong.",
+         TEAL),
+    ]:
+        card(d, x, row2_y, w2, row2_h)
+        scene(d, x + 2, row2_y + 2, w2 - 4, 98)
+        card_text(d, x, row2_y, w2, row2_h, 98, kicker, headline, subline,
+                  accent, head_size=27)
 
     # ---- Footer ----
     foot = ("Six stories from Wednesday 25 November 2026  •  "
-            "Space, sanctions, cyber, security, pharma and markets  •  "
+            "Hormuz, Saudi oil, Ukraine, Huawei, markets and space  •  "
             "The World in One Page")
-    fw = d.textlength(foot, font=font(SANS, 17))
-    d.text(((W - fw) / 2, 962), foot, font=font(SANS, 17), fill=(90, 84, 70))
+    fw = d.textlength(foot, font=load(SANS_R, 17))
+    d.text(((PAGE - fw) / 2, 962), foot, font=load(SANS_R, 17),
+           fill=(90, 84, 70))
 
     img.save("entry.png", optimize=True)
     print("saved entry.png")
 
 
 if __name__ == "__main__":
-    main()
+    build()
